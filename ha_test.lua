@@ -70,7 +70,7 @@ local function buildPayload()
     return {
         online      = true,
         computer_id_num = os.getComputerID(),
-        label       = tostring(os.getComputerLabel()),
+        label       = os.getComputerLabel() or "unlabeled",
         uptime      = os.clock(),
         fuel        = turtle and turtle.getFuelLevel() or 0,
         fuel_max    = turtle and turtle.getFuelLimit() or 0,
