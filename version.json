@@ -1,4 +1,4 @@
 {
-  "scanner": 2,
-  "changelog": "Added auto-update and manual update override"
+  "scanner": 3,
+  "changelog": "Pause/ready handshake with HA integration updates"
 }

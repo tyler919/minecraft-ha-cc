@@ -6,10 +6,11 @@
 --   scanner setup    re-run setup wizard
 --   scanner update   force update even if version matches
 
-local VERSION       = 2
-local CONFIG_FILE   = "scanner_config.json"
-local POLL_INTERVAL = 15
-local MAX_ITEMS     = 25
+local VERSION        = 3
+local CONFIG_FILE    = "scanner_config.json"
+local POLL_INTERVAL  = 15
+local MAX_ITEMS      = 25
+local PAUSE_INTERVAL = 30   -- seconds between checks while paused
 
 local VERSION_URL = "https://raw.githubusercontent.com/tyler919/minecraft-ha-cc/main/version.json"
 local SCRIPT_URL  = "https://raw.githubusercontent.com/tyler919/minecraft-ha-cc/main/scanner.lua"
@@ -537,19 +538,59 @@ local function handleCommands(cmds)
     if not cmds or #cmds == 0 then return false end
     for _, cmd in ipairs(cmds) do
         print("[CMD] " .. tostring(cmd.command))
-        if cmd.command == "reboot"   then os.reboot() end
-        if cmd.command == "setup"    then return "setup" end
-        if cmd.command == "scan_now" then return "scan_now" end
-        if cmd.command == "update"   then
-            -- Remote-triggered update (force = false, let version check decide)
-            checkForUpdates(false, false)
-        end
-        if cmd.command == "force_update" then
-            -- Remote-triggered force reinstall regardless of version
-            checkForUpdates(true, false)
-        end
+        if cmd.command == "reboot"       then os.reboot() end
+        if cmd.command == "setup"        then return "setup" end
+        if cmd.command == "scan_now"     then return "scan_now" end
+        if cmd.command == "pause"        then return "pause" end
+        if cmd.command == "ready"        then return "ready" end
+        if cmd.command == "update"       then checkForUpdates(false, false) end
+        if cmd.command == "force_update" then checkForUpdates(true,  false) end
     end
     return false
+end
+
+-- Polls HA with a GET (no data sent) while waiting for "ready".
+-- Returns true once "ready" is received.
+local function waitForReady(url, comp_id)
+    while true do
+        color(colors.yellow)
+        io.write("[PAUSED] Waiting for HA... ")
+        resetColor()
+
+        local res, err = http.get(url .. "?computer_id=" .. comp_id)
+        if not res then
+            color(colors.red)
+            print("offline  (" .. tostring(err) .. ")")
+            resetColor()
+        else
+            local raw = res.readAll()
+            res.close()
+            local ok, result = pcall(textutils.unserialiseJSON, raw)
+            if ok and type(result) == "table" then
+                local action = handleCommands(result.commands or {})
+                if action == "ready" then
+                    color(colors.green)
+                    print("HA is ready! Resuming scanner.")
+                    resetColor()
+                    return true
+                end
+            end
+            color(colors.gray)
+            print("still waiting...")
+            resetColor()
+        end
+
+        -- Wait PAUSE_INTERVAL seconds or Q to quit
+        local t = os.startTimer(PAUSE_INTERVAL)
+        while true do
+            local ev, p1 = os.pullEvent()
+            if ev == "timer" and p1 == t then break
+            elseif ev == "key" and p1 == keys.q then
+                print("Quitting.")
+                return false
+            end
+        end
+    end
 end
 
 -- ============================================================
@@ -610,10 +651,25 @@ while true do
         color(colors.green); print("OK  (" .. #cmds .. " cmd(s))")
         resetColor()
         local action = handleCommands(cmds)
-        if action == "setup" then cfg = runSetup(); allowed = buildTypeFilter(cfg) end
+        if action == "setup" then
+            cfg = runSetup(); allowed = buildTypeFilter(cfg)
+        elseif action == "pause" then
+            color(colors.yellow)
+            print("[PAUSED] Integration updating. Waiting for HA...")
+            resetColor()
+            local resumed = waitForReady(cfg.url, cfg.id)
+            if not resumed then return end
+            goto scan_now
+        end
     else
+        -- Connection failed — assume HA is restarting, enter wait mode
         color(colors.red); print("FAIL: " .. tostring(result))
+        color(colors.yellow)
+        print("[PAUSED] Connection lost. Waiting for HA to come back...")
         resetColor()
+        local resumed = waitForReady(cfg.url, cfg.id)
+        if not resumed then return end
+        goto scan_now
     end
 
     local timer = os.startTimer(cfg.interval)
@@ -623,4 +679,6 @@ while true do
         elseif ev == "key" and p1 == keys.q then print("Quitting."); return
         end
     end
+
+    ::scan_now::
 end
