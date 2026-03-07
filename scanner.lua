@@ -193,11 +193,37 @@ end
 -- SETUP WIZARD
 -- ============================================================
 local function runSetup()
-    header("HA Scanner — First Time Setup")
+    header("HA Scanner — Setup")
 
-    print("This wizard will configure what to scan and report.")
-    print("You can re-run it any time with:  scanner setup")
+    print("You can re-run this any time with:  scanner setup")
     print("")
+
+    -- Quick or full setup?
+    color(colors.yellow)
+    print("Setup mode:")
+    resetColor()
+    print("  1. Quick setup  — webhook, name, interval only  (all modules on)")
+    print("  2. Full setup   — choose which modules to enable")
+    print("")
+    color(colors.cyan)
+    io.write("Press 1 or 2: ")
+    resetColor()
+
+    local quickMode = false
+    while true do
+        local _, key = os.pullEvent("key")
+        if key == keys.one then
+            quickMode = true
+            print("1")
+            break
+        elseif key == keys.two then
+            print("2")
+            break
+        end
+    end
+    print("")
+
+    -- ── The three shared basics ──────────────────────────────────────────
 
     -- Webhook URL
     local url = ask("Home Assistant webhook URL", "http://192.168.1.X:8123/api/webhook/YOUR_ID")
@@ -217,69 +243,68 @@ local function runSetup()
     local interval_str = ask("Scan interval in seconds", tostring(POLL_INTERVAL))
     local interval = tonumber(interval_str) or POLL_INTERVAL
 
-    -- Module selection
-    print("")
-    color(colors.yellow)
-    print("Select modules to enable:")
-    resetColor()
-    print("Press a number key to toggle. Press Enter when done.")
-    print("")
+    -- ── Module selection (full setup only) ───────────────────────────────
 
     local enabled = {}
-    for i, mod in ipairs(MODULES) do
-        enabled[i] = true  -- all on by default
+    for i = 1, #MODULES do
+        enabled[i] = true  -- default: all on
     end
 
-    local function drawModules()
-        local _, startY = term.getCursorPos()
-        -- Move up to redraw (estimate 1 line per module + 1 header)
-        local drawY = startY
-        for i, mod in ipairs(MODULES) do
-            term.setCursorPos(1, drawY + i - 1)
-            term.clearLine()
-            if enabled[i] then
-                color(colors.green)
-                io.write("[X] ")
-            else
-                color(colors.gray)
-                io.write("[ ] ")
-            end
-            resetColor()
-            color(colors.white)
-            io.write(i .. ". " .. mod.label)
-            color(colors.gray)
-            print("  — " .. mod.desc)
-            resetColor()
-        end
-        term.setCursorPos(1, drawY + #MODULES)
+    if not quickMode then
         print("")
-        color(colors.cyan)
-        io.write("> ")
+        color(colors.yellow)
+        print("Select modules to enable:")
         resetColor()
-    end
+        print("Press a number key to toggle. Press Enter when done.")
+        print("")
 
-    -- Initial draw
-    local _, startRow = term.getCursorPos()
-    drawModules()
-
-    while true do
-        local ev, key = os.pullEvent("key")
-        -- keys.one through keys.nine are sequential starting at keys.one
-        if key >= keys.one and key <= keys.nine then
-            local num = key - keys.one + 1
-            if num >= 1 and num <= #MODULES then
-                enabled[num] = not enabled[num]
-                term.setCursorPos(1, startRow)
-                drawModules()
+        local function drawModules()
+            local _, startY = term.getCursorPos()
+            local drawY = startY
+            for i, mod in ipairs(MODULES) do
+                term.setCursorPos(1, drawY + i - 1)
+                term.clearLine()
+                if enabled[i] then
+                    color(colors.green); io.write("[X] ")
+                else
+                    color(colors.gray);  io.write("[ ] ")
+                end
+                resetColor()
+                color(colors.white); io.write(i .. ". " .. mod.label)
+                color(colors.gray);  print("  — " .. mod.desc)
+                resetColor()
             end
-        elseif key == keys.enter then
-            break
+            term.setCursorPos(1, drawY + #MODULES)
+            print("")
+            color(colors.cyan); io.write("> "); resetColor()
         end
+
+        local _, startRow = term.getCursorPos()
+        drawModules()
+
+        while true do
+            local _, key = os.pullEvent("key")
+            if key >= keys.one and key <= keys.nine then
+                local num = key - keys.one + 1
+                if num >= 1 and num <= #MODULES then
+                    enabled[num] = not enabled[num]
+                    term.setCursorPos(1, startRow)
+                    drawModules()
+                end
+            elseif key == keys.enter then
+                break
+            end
+        end
+        print("")
+    else
+        color(colors.gray)
+        print("(All modules enabled — run 'scanner setup' to customise)")
+        resetColor()
+        print("")
     end
 
-    print("")
+    -- ── Build and save config ─────────────────────────────────────────────
 
-    -- Build config
     local cfg = {
         url      = url,
         id       = comp_id,
@@ -290,7 +315,6 @@ local function runSetup()
         cfg.modules[mod.id] = enabled[i]
     end
 
-    -- Save
     local f = fs.open(CONFIG_FILE, "w")
     f.write(textutils.serialiseJSON(cfg))
     f.close()
