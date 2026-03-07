@@ -5,8 +5,9 @@
 --   scanner          normal run (auto-updates on startup)
 --   scanner setup    re-run setup wizard
 --   scanner update   force update even if version matches
+--   scanner log      print the in-memory log to a connected printer
 
-local VERSION        = 7
+local VERSION        = 8
 local CONFIG_FILE    = "scanner_config.json"
 local POLL_INTERVAL  = 15
 local MAX_ITEMS      = 25
@@ -17,19 +18,26 @@ local SCRIPT_URL   = "https://raw.githubusercontent.com/tyler919/minecraft-ha-cc
 local SCRIPT_PATH  = shell.getRunningProgram()
 local SETUP_FLAG   = "scanner_setup_pending"   -- written before update reboot
 
+-- Log buffer
+local LOG_MAX        = 100   -- entries kept in memory
+local PRINTER_WIDTH  = 25    -- CC printer page width (chars)
+local PRINTER_HEIGHT = 21    -- CC printer page height (lines)
+local logBuffer = {}
+
 -- ============================================================
 -- MODULE DEFINITIONS
 -- Each module owns a set of peripheral types.
 -- Only enabled modules have their handlers run.
 -- ============================================================
 local MODULES = {
-    { id = "power",       label = "Power & Energy",                  desc = "Energy storage, RF/FE meters",            types = {"energy_storage", "energy_detector"} },
+    -- types lists both snake_case (vanilla/some mods) and camelCase (Advanced Peripherals)
+    { id = "power",       label = "Power & Energy",                  desc = "Energy storage, RF/FE meters",            types = {"energy_storage", "energyStorage", "energy_detector", "energyDetector"} },
     { id = "storage",     label = "Storage & Inventories",           desc = "Chests, barrels, any inventory block",     types = {"inventory", "drive"} },
-    { id = "me",          label = "ME System  (Applied Energistics)", desc = "Item counts, energy, craftables",         types = {"me_bridge"} },
-    { id = "rs",          label = "Refined Storage",                  desc = "Item counts, energy, patterns",           types = {"rs_bridge"} },
-    { id = "environment", label = "Environment",                      desc = "Weather, time, light level, biome",       types = {"environment_detector"} },
-    { id = "players",     label = "Player Detection",                 desc = "Online players list and count",           types = {"player_detector"} },
-    { id = "fluids",      label = "Fluids & Tanks",                   desc = "Tank contents, capacity",                 types = {"fluid_storage"} },
+    { id = "me",          label = "ME System  (Applied Energistics)", desc = "Item counts, energy, craftables",         types = {"me_bridge", "meBridge"} },
+    { id = "rs",          label = "Refined Storage",                  desc = "Item counts, energy, patterns",           types = {"rs_bridge", "rsBridge"} },
+    { id = "environment", label = "Environment",                      desc = "Weather, time, light level, biome",       types = {"environment_detector", "environmentDetector"} },
+    { id = "players",     label = "Player Detection",                 desc = "Online players list and count",           types = {"player_detector", "playerDetector"} },
+    { id = "fluids",      label = "Fluids & Tanks",                   desc = "Tank contents, capacity",                 types = {"fluid_storage", "fluidStorage"} },
     { id = "devices",     label = "Computers & Devices",              desc = "Monitors, modems, printers, other CCs",   types = {"computer", "monitor", "modem", "printer"} },
 }
 
@@ -75,6 +83,93 @@ local function confirm(prompt)
     resetColor()
     local ans = read()
     return ans:lower():sub(1,1) == "y"
+end
+
+-- ============================================================
+-- LOGGING
+-- ============================================================
+local function logAdd(level, msg)
+    table.insert(logBuffer, { t = os.clock(), level = level, msg = msg })
+    if #logBuffer > LOG_MAX then table.remove(logBuffer, 1) end
+end
+
+-- Print the log buffer to a connected printer.
+local function printLog()
+    -- Find a printer peripheral
+    local printerName = nil
+    for _, name in ipairs(peripheral.getNames()) do
+        local ptypes = { peripheral.getType(name) }
+        for _, t in ipairs(ptypes) do
+            if t == "printer" then printerName = name; break end
+        end
+        if printerName then break end
+    end
+
+    if not printerName then
+        color(colors.red)
+        print("[LOG] No printer found. Connect a printer to this computer.")
+        resetColor()
+        return
+    end
+
+    local p = peripheral.wrap(printerName)
+
+    if p.getPaperLevel() == 0 then
+        color(colors.red); print("[LOG] Printer is out of paper."); resetColor()
+        return
+    end
+    if p.getInkLevel() == 0 then
+        color(colors.red); print("[LOG] Printer is out of ink."); resetColor()
+        return
+    end
+
+    if #logBuffer == 0 then
+        print("[LOG] Log is empty — nothing to print.")
+        return
+    end
+
+    local pageNum  = 1
+    local lineNum  = 1
+
+    local function newPage()
+        p.newPage()
+        p.setPageTitle("ScannerLog p" .. pageNum)
+        lineNum = 1
+    end
+
+    local function writeLine(text)
+        -- Hard-wrap at PRINTER_WIDTH
+        while #text > 0 do
+            if p.getPaperLevel() == 0 then return false end
+            p.setCursorPos(1, lineNum)
+            p.write(text:sub(1, PRINTER_WIDTH))
+            text = text:sub(PRINTER_WIDTH + 1)
+            lineNum = lineNum + 1
+            if lineNum > PRINTER_HEIGHT and #text > 0 then
+                p.endPage()
+                pageNum = pageNum + 1
+                newPage()
+            end
+        end
+        return true
+    end
+
+    newPage()
+    for _, entry in ipairs(logBuffer) do
+        local line = string.format("%5ds %s %s", math.floor(entry.t), entry.level, entry.msg)
+        if not writeLine(line) then break end
+        if lineNum > PRINTER_HEIGHT then
+            p.endPage()
+            if p.getPaperLevel() == 0 then break end
+            pageNum = pageNum + 1
+            newPage()
+        end
+    end
+    p.endPage()
+
+    color(colors.green)
+    print("[LOG] Printed " .. #logBuffer .. " entries across " .. pageNum .. " page(s).")
+    resetColor()
 end
 
 -- ============================================================
@@ -512,6 +607,15 @@ handlers["computer"] = function(p)
     return { id = id or 0, label = lbl or "unlabeled", is_on = on or false }
 end
 
+-- camelCase aliases for Advanced Peripherals (which uses camelCase type names)
+handlers["meBridge"]            = handlers["me_bridge"]
+handlers["rsBridge"]            = handlers["rs_bridge"]
+handlers["energyDetector"]      = handlers["energy_detector"]
+handlers["energyStorage"]       = handlers["energy_storage"]
+handlers["environmentDetector"] = handlers["environment_detector"]
+handlers["playerDetector"]      = handlers["player_detector"]
+handlers["fluidStorage"]        = handlers["fluid_storage"]
+
 -- ============================================================
 -- BUILD TYPE → MODULE MAP  (used to filter by enabled modules)
 -- ============================================================
@@ -577,12 +681,20 @@ local function scan(cfg, allowed)
                 if handler then
                     local ok, data = pcall(handler, p)
                     if ok and type(data) == "table" then
+                        logAdd("INFO", "periph " .. name .. " (" .. ptype .. "): OK")
                         for k, v in pairs(data) do
                             payload[prefix .. k] = v
                         end
+                    else
+                        logAdd("WARN", "periph " .. name .. " (" .. ptype .. "): handler error")
                     end
+                else
+                    logAdd("INFO", "periph " .. name .. " (" .. ptype .. "): no handler")
                 end
             end
+        else
+            -- Peripheral exists but no module covers it — log raw types
+            logAdd("INFO", "skip " .. name .. " types=" .. table.concat(ptypes, ","))
         end
     end
 
@@ -675,6 +787,14 @@ if args[1] == "update" then
     return
 end
 
+if args[1] == "log" then
+    -- Print the current log buffer to a connected printer
+    -- (log will be empty on a fresh start since scanning hasn't run yet)
+    header("HA Scanner — Print Log")
+    printLog()
+    return
+end
+
 -- ── Auto-update check on startup (silent unless update found) ────────────
 checkForUpdates(false, true)
 
@@ -711,7 +831,7 @@ for _, mod in ipairs(MODULES) do
     end
 end
 print("")
-color(colors.gray); print("Press Q to quit | run 'scanner setup' to reconfigure")
+color(colors.gray); print("Press Q to quit | P to print log | run 'scanner setup' to reconfigure")
 resetColor(); print("")
 
 -- Main scan loop
@@ -728,6 +848,7 @@ while true do
         local cmds = result and result.commands or {}
         color(colors.green); print("OK  (" .. #cmds .. " cmd(s))")
         resetColor()
+        logAdd("INFO", "send OK cmds=" .. #cmds .. " periph=" .. payload.periph_count)
         local action = handleCommands(cmds)
         if action == "setup" then
             cfg = runSetup(cfg); allowed = buildTypeFilter(cfg)
@@ -741,6 +862,7 @@ while true do
         end
     else
         -- Connection failed — assume HA is restarting, enter wait mode
+        logAdd("ERR", "send FAIL: " .. tostring(result))
         color(colors.red); print("FAIL: " .. tostring(result))
         color(colors.yellow)
         print("[PAUSED] Connection lost. Waiting for HA to come back...")
@@ -755,6 +877,7 @@ while true do
         local ev, p1 = os.pullEvent()
         if ev == "timer" and p1 == timer then break
         elseif ev == "key" and p1 == keys.q then print("Quitting."); return
+        elseif ev == "key" and p1 == keys.p then printLog()
         end
     end
 

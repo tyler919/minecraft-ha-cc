@@ -1,4 +1,4 @@
 {
-  "scanner": 7,
-  "changelog": "Fix peripheral detection: check all types returned by getType()"
+  "scanner": 8,
+  "changelog": "Fix AP camelCase types (meBridge etc); add printer log system"
 }
