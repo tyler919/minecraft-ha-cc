@@ -1,4 +1,4 @@
 {
-  "scanner": 8,
-  "changelog": "Fix AP camelCase types (meBridge etc); add printer log system"
+  "scanner": 9,
+  "changelog": "New module selector: arrow keys + space, scrollable, no limit"
 }

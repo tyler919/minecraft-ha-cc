@@ -7,7 +7,7 @@
 --   scanner update   force update even if version matches
 --   scanner log      print the in-memory log to a connected printer
 
-local VERSION        = 8
+local VERSION        = 9
 local CONFIG_FILE    = "scanner_config.json"
 local POLL_INTERVAL  = 15
 local MAX_ITEMS      = 25
@@ -381,48 +381,120 @@ local function runSetup(oldCfg)
     if not quickMode then
         print("")
         color(colors.yellow)
-        print("Select modules to enable:")
+        print("Select modules:")
         resetColor()
-        print("Press a number key to toggle. Press Enter when done.")
+        color(colors.gray)
+        print("  Up/Down=move  Space=toggle  A=all  N=none  Enter=done")
+        resetColor()
         print("")
 
-        local function drawModules()
-            local _, startY = term.getCursorPos()
-            local drawY = startY
-            for i, mod in ipairs(MODULES) do
-                term.setCursorPos(1, drawY + i - 1)
-                term.clearLine()
-                if enabled[i] then
-                    color(colors.green); io.write("[X] ")
-                else
-                    color(colors.gray);  io.write("[ ] ")
-                end
-                resetColor()
-                color(colors.white); io.write(i .. ". " .. mod.label)
-                color(colors.gray);  print("  — " .. mod.desc)
-                resetColor()
-            end
-            term.setCursorPos(1, drawY + #MODULES)
-            print("")
-            color(colors.cyan); io.write("> "); resetColor()
+        -- Figure out how many rows we can use for the list
+        local W, H = term.getSize()
+        local _, listY = term.getCursorPos()
+        local visRows = H - listY  -- rows left on screen
+        if visRows < 1 then visRows = 1 end
+
+        local cursor = 1
+        local offset = 0  -- index of first visible module (0-based)
+
+        local function clamp()
+            if cursor - 1 < offset then offset = cursor - 1 end
+            if cursor - 1 >= offset + visRows then offset = cursor - 1 - visRows + 1 end
+            if offset < 0 then offset = 0 end
         end
 
-        local _, startRow = term.getCursorPos()
-        drawModules()
+        local function drawList()
+            for row = 1, visRows do
+                local idx = offset + row
+                term.setCursorPos(1, listY + row - 1)
+
+                if idx > #MODULES then
+                    -- Clear any leftover line from a previous draw
+                    if USE_COLOR then term.setBackgroundColor(colors.black) end
+                    term.clearLine()
+                else
+                    local mod    = MODULES[idx]
+                    local isCur  = (idx == cursor)
+
+                    -- Highlight current row with a gray background
+                    if USE_COLOR then
+                        term.setBackgroundColor(isCur and colors.gray or colors.black)
+                    end
+                    term.clearLine()
+
+                    -- Cursor arrow
+                    if USE_COLOR then term.setTextColor(colors.yellow) end
+                    io.write(isCur and " > " or "   ")
+
+                    -- Checkbox
+                    if enabled[idx] then
+                        if USE_COLOR then term.setTextColor(colors.green) end
+                        io.write("[X] ")
+                    else
+                        if USE_COLOR then term.setTextColor(colors.lightGray) end
+                        io.write("[ ] ")
+                    end
+
+                    -- Module label
+                    if USE_COLOR then term.setTextColor(colors.white) end
+                    io.write(mod.label)
+
+                    -- Description, truncated to fit remaining width
+                    local used  = 3 + 4 + #mod.label  -- " > " + "[X] " + label
+                    local avail = W - used - 4          -- " -- " separator (4 chars)
+                    if avail > 4 then
+                        local desc = mod.desc
+                        if #desc > avail then desc = desc:sub(1, avail - 2) .. ".." end
+                        if USE_COLOR then term.setTextColor(colors.gray) end
+                        io.write(" -- " .. desc)
+                    end
+
+                    -- Always reset colours after each row
+                    if USE_COLOR then
+                        term.setBackgroundColor(colors.black)
+                        term.setTextColor(colors.white)
+                    end
+                end
+            end
+
+            -- Scroll indicators on the right edge
+            if offset > 0 then
+                term.setCursorPos(W, listY)
+                if USE_COLOR then term.setTextColor(colors.yellow) end
+                io.write("^")
+                if USE_COLOR then term.setTextColor(colors.white) end
+            end
+            if offset + visRows < #MODULES then
+                term.setCursorPos(W, listY + visRows - 1)
+                if USE_COLOR then term.setTextColor(colors.yellow) end
+                io.write("v")
+                if USE_COLOR then term.setTextColor(colors.white) end
+            end
+        end
+
+        clamp()
+        drawList()
 
         while true do
             local _, key = os.pullEvent("key")
-            if key >= keys.one and key <= keys.nine then
-                local num = key - keys.one + 1
-                if num >= 1 and num <= #MODULES then
-                    enabled[num] = not enabled[num]
-                    term.setCursorPos(1, startRow)
-                    drawModules()
-                end
+            if key == keys.up then
+                if cursor > 1 then cursor = cursor - 1; clamp(); drawList() end
+            elseif key == keys.down then
+                if cursor < #MODULES then cursor = cursor + 1; clamp(); drawList() end
+            elseif key == keys.space then
+                enabled[cursor] = not enabled[cursor]; drawList()
+            elseif key == keys.a then
+                for i = 1, #MODULES do enabled[i] = true  end; drawList()
+            elseif key == keys.n then
+                for i = 1, #MODULES do enabled[i] = false end; drawList()
             elseif key == keys.enter then
                 break
             end
         end
+
+        -- Move the cursor below the list before continuing
+        term.setCursorPos(1, listY + visRows)
+        if USE_COLOR then term.setBackgroundColor(colors.black) end
         print("")
     else
         color(colors.gray)
