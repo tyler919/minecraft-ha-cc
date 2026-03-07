@@ -1,4 +1,4 @@
 {
-  "scanner": 4,
-  "changelog": "Quick setup mode: webhook, name, interval only"
+  "scanner": 5,
+  "changelog": "Setup: reuse existing webhook/name/interval without re-entering"
 }

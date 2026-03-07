@@ -6,7 +6,7 @@
 --   scanner setup    re-run setup wizard
 --   scanner update   force update even if version matches
 
-local VERSION        = 3
+local VERSION        = 5
 local CONFIG_FILE    = "scanner_config.json"
 local POLL_INTERVAL  = 15
 local MAX_ITEMS      = 25
@@ -192,18 +192,65 @@ end
 -- ============================================================
 -- SETUP WIZARD
 -- ============================================================
-local function runSetup()
+-- oldCfg: existing config table (may be nil on first run)
+local function runSetup(oldCfg)
     header("HA Scanner — Setup")
 
     print("You can re-run this any time with:  scanner setup")
     print("")
 
-    -- Quick or full setup?
+    -- ── Keep existing basics? ────────────────────────────────────────────
+
+    local url, comp_id, interval
+
+    if oldCfg and oldCfg.url and oldCfg.id and oldCfg.interval then
+        color(colors.yellow)
+        print("Existing configuration found:")
+        resetColor()
+        color(colors.gray)
+        print("  Webhook  : " .. oldCfg.url)
+        print("  Name     : " .. oldCfg.id)
+        print("  Interval : " .. oldCfg.interval .. "s")
+        resetColor()
+        print("")
+
+        if confirm("Keep these basic settings?") then
+            url      = oldCfg.url
+            comp_id  = oldCfg.id
+            interval = oldCfg.interval
+            color(colors.green)
+            print("Basic settings carried over.")
+            resetColor()
+        end
+        print("")
+    end
+
+    -- ── Ask for basics only if not carried over ──────────────────────────
+
+    if not url then
+        url = ask("Home Assistant webhook URL", "http://192.168.1.X:8123/api/webhook/YOUR_ID")
+        while url == "" or url:find("YOUR_ID") do
+            color(colors.red)
+            print("Please enter a valid URL.")
+            resetColor()
+            url = ask("Webhook URL")
+        end
+
+        local default_id = "scanner_" .. os.getComputerID()
+        comp_id = ask("Name for this computer", default_id)
+        if comp_id == "" then comp_id = default_id end
+
+        local interval_str = ask("Scan interval in seconds", tostring(POLL_INTERVAL))
+        interval = tonumber(interval_str) or POLL_INTERVAL
+    end
+
+    -- ── Module selection ─────────────────────────────────────────────────
+
     color(colors.yellow)
-    print("Setup mode:")
+    print("Module setup:")
     resetColor()
-    print("  1. Quick setup  — webhook, name, interval only  (all modules on)")
-    print("  2. Full setup   — choose which modules to enable")
+    print("  1. Quick  — enable all modules")
+    print("  2. Custom — choose which modules to enable")
     print("")
     color(colors.cyan)
     io.write("Press 1 or 2: ")
@@ -222,26 +269,6 @@ local function runSetup()
         end
     end
     print("")
-
-    -- ── The three shared basics ──────────────────────────────────────────
-
-    -- Webhook URL
-    local url = ask("Home Assistant webhook URL", "http://192.168.1.X:8123/api/webhook/YOUR_ID")
-    while url == "" or url:find("YOUR_ID") do
-        color(colors.red)
-        print("Please enter a valid URL.")
-        resetColor()
-        url = ask("Webhook URL")
-    end
-
-    -- Computer ID
-    local default_id = "scanner_" .. os.getComputerID()
-    local comp_id = ask("Name for this computer", default_id)
-    if comp_id == "" then comp_id = default_id end
-
-    -- Poll interval
-    local interval_str = ask("Scan interval in seconds", tostring(POLL_INTERVAL))
-    local interval = tonumber(interval_str) or POLL_INTERVAL
 
     -- ── Module selection (full setup only) ───────────────────────────────
 
@@ -638,7 +665,7 @@ checkForUpdates(false, true)
 -- ── Load or run setup ─────────────────────────────────────────────────────
 local cfg = loadConfig()
 if not cfg or args[1] == "setup" then
-    cfg = runSetup()
+    cfg = runSetup(cfg)
 end
 
 local allowed = buildTypeFilter(cfg)
@@ -676,7 +703,7 @@ while true do
         resetColor()
         local action = handleCommands(cmds)
         if action == "setup" then
-            cfg = runSetup(); allowed = buildTypeFilter(cfg)
+            cfg = runSetup(cfg); allowed = buildTypeFilter(cfg)
         elseif action == "pause" then
             color(colors.yellow)
             print("[PAUSED] Integration updating. Waiting for HA...")
