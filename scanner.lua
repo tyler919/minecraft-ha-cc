@@ -1,10 +1,19 @@
 -- scanner.lua
 -- First run (or `scanner setup`): interactive setup wizard
 -- Subsequent runs: loads config and scans peripherals
+-- Usage:
+--   scanner          normal run (auto-updates on startup)
+--   scanner setup    re-run setup wizard
+--   scanner update   force update even if version matches
 
+local VERSION       = 2
 local CONFIG_FILE   = "scanner_config.json"
 local POLL_INTERVAL = 15
 local MAX_ITEMS     = 25
+
+local VERSION_URL = "https://raw.githubusercontent.com/tyler919/minecraft-ha-cc/main/version.json"
+local SCRIPT_URL  = "https://raw.githubusercontent.com/tyler919/minecraft-ha-cc/main/scanner.lua"
+local SCRIPT_PATH = shell.getRunningProgram()
 
 -- ============================================================
 -- MODULE DEFINITIONS
@@ -64,6 +73,119 @@ local function confirm(prompt)
     resetColor()
     local ans = read()
     return ans:lower():sub(1,1) == "y"
+end
+
+-- ============================================================
+-- AUTO-UPDATE
+-- ============================================================
+
+-- Checks GitHub for a newer version.
+-- force = true  → download even if version matches (manual override)
+-- silent = true → only print if something happens
+local function checkForUpdates(force, silent)
+    if not silent then
+        color(colors.cyan)
+        io.write("[UPDATE] Checking for updates (current v" .. VERSION .. ")... ")
+        resetColor()
+    end
+
+    -- Fetch version.json
+    local res, err = http.get(VERSION_URL)
+    if not res then
+        if not silent then
+            color(colors.red)
+            print("FAILED")
+            print("  Could not reach update server: " .. tostring(err))
+            print("  Check your internet connection or try again later.")
+            resetColor()
+        end
+        return false
+    end
+
+    local raw = res.readAll()
+    res.close()
+
+    local ok, data = pcall(textutils.unserialiseJSON, raw)
+    if not ok or type(data) ~= "table" or not data.scanner then
+        if not silent then
+            color(colors.red)
+            print("FAILED")
+            print("  Invalid version data received.")
+            resetColor()
+        end
+        return false
+    end
+
+    local remote = data.scanner
+
+    if not force and remote <= VERSION then
+        if not silent then
+            color(colors.green)
+            print("Up to date  (v" .. VERSION .. ")")
+            resetColor()
+        end
+        return false
+    end
+
+    if force and remote <= VERSION then
+        color(colors.yellow)
+        print("Force re-installing v" .. VERSION .. "...")
+        resetColor()
+    else
+        color(colors.yellow)
+        print("Update found!  v" .. VERSION .. " → v" .. remote)
+        if data.changelog then
+            color(colors.gray)
+            print("  " .. data.changelog)
+        end
+        resetColor()
+    end
+
+    -- Download new script
+    io.write("[UPDATE] Downloading... ")
+    local dl, dl_err = http.get(SCRIPT_URL)
+    if not dl then
+        color(colors.red)
+        print("FAILED")
+        print("  Download error: " .. tostring(dl_err))
+        print("  Manual fix: wget " .. SCRIPT_URL .. " " .. SCRIPT_PATH)
+        resetColor()
+        return false
+    end
+
+    local new_code = dl.readAll()
+    dl.close()
+
+    -- Basic sanity check — a valid Lua script will be much larger than this
+    if not new_code or #new_code < 200 then
+        color(colors.red)
+        print("FAILED")
+        print("  Downloaded file looks empty or corrupt.")
+        print("  Manual fix: wget " .. SCRIPT_URL .. " " .. SCRIPT_PATH)
+        resetColor()
+        return false
+    end
+
+    -- Write to disk
+    local f = fs.open(SCRIPT_PATH, "w")
+    if not f then
+        color(colors.red)
+        print("FAILED")
+        print("  Cannot write to " .. SCRIPT_PATH .. " — is the file read-only?")
+        print("  Manual fix: delete " .. SCRIPT_PATH .. " then run:")
+        print("    wget " .. SCRIPT_URL .. " " .. SCRIPT_PATH)
+        resetColor()
+        return false
+    end
+    f.write(new_code)
+    f.close()
+
+    color(colors.green)
+    print("Done!  Rebooting in 2s...")
+    resetColor()
+    sleep(2)
+    os.reboot()
+    return true  -- unreachable after reboot, but just in case
 end
 
 -- ============================================================
@@ -412,9 +534,17 @@ local function handleCommands(cmds)
     if not cmds or #cmds == 0 then return false end
     for _, cmd in ipairs(cmds) do
         print("[CMD] " .. tostring(cmd.command))
-        if cmd.command == "reboot"    then os.reboot() end
-        if cmd.command == "setup"     then return "setup" end
-        if cmd.command == "scan_now"  then return "scan_now" end
+        if cmd.command == "reboot"   then os.reboot() end
+        if cmd.command == "setup"    then return "setup" end
+        if cmd.command == "scan_now" then return "scan_now" end
+        if cmd.command == "update"   then
+            -- Remote-triggered update (force = false, let version check decide)
+            checkForUpdates(false, false)
+        end
+        if cmd.command == "force_update" then
+            -- Remote-triggered force reinstall regardless of version
+            checkForUpdates(true, false)
+        end
     end
     return false
 end
@@ -424,7 +554,20 @@ end
 -- ============================================================
 local args = { ... }
 
--- Load or run setup
+-- ── Handle CLI arguments ──────────────────────────────────────────────────
+if args[1] == "update" then
+    -- Manual update override — force download even if already up to date
+    header("HA Scanner — Manual Update")
+    checkForUpdates(true, false)
+    -- If update failed (no reboot happened), exit cleanly
+    print("No update applied. Script is unchanged.")
+    return
+end
+
+-- ── Auto-update check on startup (silent unless update found) ────────────
+checkForUpdates(false, true)
+
+-- ── Load or run setup ─────────────────────────────────────────────────────
 local cfg = loadConfig()
 if not cfg or args[1] == "setup" then
     cfg = runSetup()
