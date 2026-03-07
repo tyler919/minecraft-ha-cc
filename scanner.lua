@@ -7,7 +7,7 @@
 --   scanner update   force update even if version matches
 --   scanner log      print the in-memory log to a connected printer
 
-local VERSION        = 9
+local VERSION        = 10
 local CONFIG_FILE    = "scanner_config.json"
 local POLL_INTERVAL  = 15
 local MAX_ITEMS      = 25
@@ -17,6 +17,9 @@ local VERSION_URL  = "https://raw.githubusercontent.com/tyler919/minecraft-ha-cc
 local SCRIPT_URL   = "https://raw.githubusercontent.com/tyler919/minecraft-ha-cc/main/scanner.lua"
 local SCRIPT_PATH  = shell.getRunningProgram()
 local SETUP_FLAG   = "scanner_setup_pending"   -- written before update reboot
+
+-- Energy rate tracking (persists across scans within a session)
+local prevEnergy = {}  -- [peripheral_name] = { energy = N, time = N }
 
 -- Log buffer
 local LOG_MAX        = 100   -- entries kept in memory
@@ -754,6 +757,20 @@ local function scan(cfg, allowed)
                     local ok, data = pcall(handler, p)
                     if ok and type(data) == "table" then
                         logAdd("INFO", "periph " .. name .. " (" .. ptype .. "): OK")
+
+                        -- Energy rate: FE/s (positive = charging, negative = draining)
+                        if (ptype == "energy_storage" or ptype == "energyStorage")
+                                and type(data.energy) == "number" then
+                            local now  = os.clock()
+                            local prev = prevEnergy[name]
+                            if prev and (now - prev.time) > 0 then
+                                data.energy_rate = math.floor(
+                                    (data.energy - prev.energy) / (now - prev.time)
+                                )
+                            end
+                            prevEnergy[name] = { energy = data.energy, time = now }
+                        end
+
                         for k, v in pairs(data) do
                             payload[prefix .. k] = v
                         end

@@ -1,4 +1,4 @@
 {
-  "scanner": 9,
-  "changelog": "New module selector: arrow keys + space, scrollable, no limit"
+  "scanner": 10,
+  "changelog": "Energy rate tracking (FE/s) for HA energy dashboard"
 }
