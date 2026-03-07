@@ -1,4 +1,4 @@
 {
-  "scanner": 5,
-  "changelog": "Setup: reuse existing webhook/name/interval without re-entering"
+  "scanner": 6,
+  "changelog": "Auto-launch setup after scanner update reboots"
 }

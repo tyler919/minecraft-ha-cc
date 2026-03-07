@@ -6,15 +6,16 @@
 --   scanner setup    re-run setup wizard
 --   scanner update   force update even if version matches
 
-local VERSION        = 5
+local VERSION        = 6
 local CONFIG_FILE    = "scanner_config.json"
 local POLL_INTERVAL  = 15
 local MAX_ITEMS      = 25
 local PAUSE_INTERVAL = 30   -- seconds between checks while paused
 
-local VERSION_URL = "https://raw.githubusercontent.com/tyler919/minecraft-ha-cc/main/version.json"
-local SCRIPT_URL  = "https://raw.githubusercontent.com/tyler919/minecraft-ha-cc/main/scanner.lua"
-local SCRIPT_PATH = shell.getRunningProgram()
+local VERSION_URL  = "https://raw.githubusercontent.com/tyler919/minecraft-ha-cc/main/version.json"
+local SCRIPT_URL   = "https://raw.githubusercontent.com/tyler919/minecraft-ha-cc/main/scanner.lua"
+local SCRIPT_PATH  = shell.getRunningProgram()
+local SETUP_FLAG   = "scanner_setup_pending"   -- written before update reboot
 
 -- ============================================================
 -- MODULE DEFINITIONS
@@ -184,6 +185,11 @@ local function checkForUpdates(force, silent)
     color(colors.green)
     print("Done!  Rebooting in 2s...")
     resetColor()
+
+    -- Flag setup to run automatically after the reboot
+    local fl = fs.open(SETUP_FLAG, "w")
+    if fl then fl.write("1"); fl.close() end
+
     sleep(2)
     os.reboot()
     return true  -- unreachable after reboot, but just in case
@@ -664,7 +670,18 @@ checkForUpdates(false, true)
 
 -- ── Load or run setup ─────────────────────────────────────────────────────
 local cfg = loadConfig()
-if not cfg or args[1] == "setup" then
+
+-- Check for post-update setup flag (written by checkForUpdates before reboot)
+local postUpdateSetup = fs.exists(SETUP_FLAG)
+if postUpdateSetup then
+    fs.delete(SETUP_FLAG)
+    color(colors.yellow)
+    print("[UPDATE] Update applied. Launching setup...")
+    resetColor()
+    print("")
+end
+
+if not cfg or args[1] == "setup" or postUpdateSetup then
     cfg = runSetup(cfg)
 end
 
