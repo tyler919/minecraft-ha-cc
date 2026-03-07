@@ -263,11 +263,14 @@ local function runSetup()
 
     while true do
         local ev, key = os.pullEvent("key")
-        local num = tonumber(keys.getName(key))
-        if num and num >= 1 and num <= #MODULES then
-            enabled[num] = not enabled[num]
-            term.setCursorPos(1, startRow)
-            drawModules()
+        -- keys.one through keys.nine are sequential starting at keys.one
+        if key >= keys.one and key <= keys.nine then
+            local num = key - keys.one + 1
+            if num >= 1 and num <= #MODULES then
+                enabled[num] = not enabled[num]
+                term.setCursorPos(1, startRow)
+                drawModules()
+            end
         elseif key == keys.enter then
             break
         end
