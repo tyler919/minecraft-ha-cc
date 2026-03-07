@@ -1,4 +1,4 @@
 {
-  "scanner": 6,
-  "changelog": "Auto-launch setup after scanner update reboots"
+  "scanner": 7,
+  "changelog": "Fix peripheral detection: check all types returned by getType()"
 }

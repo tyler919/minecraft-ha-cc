@@ -6,7 +6,7 @@
 --   scanner setup    re-run setup wizard
 --   scanner update   force update even if version matches
 
-local VERSION        = 6
+local VERSION        = 7
 local CONFIG_FILE    = "scanner_config.json"
 local POLL_INTERVAL  = 15
 local MAX_ITEMS      = 25
@@ -556,8 +556,18 @@ local function scan(cfg, allowed)
     local active = 0
 
     for _, name in ipairs(names) do
-        local ptype = peripheral.getType(name)
-        if ptype and allowed[ptype] then
+        -- peripheral.getType() returns multiple values in CC:T 1.20+
+        -- (e.g. "minecraft:chest", "inventory") — check all of them
+        local ptypes = { peripheral.getType(name) }
+        local ptype = nil
+        for _, t in ipairs(ptypes) do
+            if allowed[t] then
+                ptype = t
+                break
+            end
+        end
+
+        if ptype then
             local p = peripheral.wrap(name)
             if p then
                 active = active + 1
