@@ -215,6 +215,15 @@ Settings are saved to `scanner_config.json` in the computer's root directory:
 
 ---
 
+## Other Files
+
+### `ha_test.lua`
+A minimal test script included for development and debugging. It sends a basic payload (computer ID, label, uptime) to the webhook and prints whatever commands HA returns. It is not part of the scanner and not needed for normal use — it is just useful for verifying that your HA webhook URL is working before running the full scanner.
+
+To use it, open it in the editor (`edit ha_test`) and set `WEBHOOK_URL` at the top, then run it with `ha_test`.
+
+---
+
 ## Related
 
 - **[minecraft-ha](https://github.com/tyler919/minecraft-ha)** — the Home Assistant integration this pairs with
