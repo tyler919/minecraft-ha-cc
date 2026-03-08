@@ -7,7 +7,7 @@
 --   scanner update   force update even if version matches
 --   scanner log      print the in-memory log to a connected printer
 
-local VERSION        = 10
+local VERSION        = 11
 local CONFIG_FILE    = "scanner_config.json"
 local POLL_INTERVAL  = 15
 local MAX_ITEMS      = 25
@@ -26,6 +26,11 @@ local LOG_MAX        = 100   -- entries kept in memory
 local PRINTER_WIDTH  = 25    -- CC printer page width (chars)
 local PRINTER_HEIGHT = 21    -- CC printer page height (lines)
 local logBuffer = {}
+
+-- Delta reporting (only changed values sent each cycle)
+local prevPayload = {}   -- [key] = last sent value
+-- Always-send fields — included even if unchanged
+local ALWAYS_SEND = { computer_id=true, online=true, uptime=true, periph_count=true }
 
 -- ============================================================
 -- MODULE DEFINITIONS
@@ -506,6 +511,16 @@ local function runSetup(oldCfg)
         print("")
     end
 
+    -- ── Optional features ─────────────────────────────────────────────────
+
+    print("")
+    color(colors.yellow); print("Optional features:"); resetColor()
+
+    local useDelta   = confirm("Enable delta reporting? (only send changed values)")
+    local useMonitor = confirm("Show status dashboard on connected monitor?")
+
+    print("")
+
     -- ── Build and save config ─────────────────────────────────────────────
 
     local cfg = {
@@ -513,6 +528,11 @@ local function runSetup(oldCfg)
         id       = comp_id,
         interval = interval,
         modules  = {},
+        delta    = useDelta,
+        monitor  = useMonitor,
+        -- thresholds: populated manually in scanner_config.json after setup
+        -- Example: [{"name":"left_percent","op":"<","value":20}]
+        thresholds = oldCfg and oldCfg.thresholds or nil,
     }
     for i, mod in ipairs(MODULES) do
         cfg.modules[mod.id] = enabled[i]
@@ -690,6 +710,155 @@ handlers["energyStorage"]       = handlers["energy_storage"]
 handlers["environmentDetector"] = handlers["environment_detector"]
 handlers["playerDetector"]      = handlers["player_detector"]
 handlers["fluidStorage"]        = handlers["fluid_storage"]
+
+-- ============================================================
+-- MONITOR DISPLAY
+-- Finds the first connected monitor and renders a status dashboard.
+-- ============================================================
+local function renderMonitor(cfg, payload, lastOk)
+    -- Find a monitor peripheral
+    local monName = nil
+    for _, name in ipairs(peripheral.getNames()) do
+        local ptypes = { peripheral.getType(name) }
+        for _, t in ipairs(ptypes) do
+            if t == "monitor" then monName = name; break end
+        end
+        if monName then break end
+    end
+    if not monName then return end
+
+    local m = peripheral.wrap(monName)
+    if not m then return end
+
+    -- Try to set text scale so the monitor shows useful content
+    pcall(m.setTextScale, 0.5)
+
+    local ok, mw, mh = pcall(m.getSize)
+    if not ok or not mw then return end
+
+    m.setBackgroundColor(colors.black)
+    m.clear()
+    m.setCursorPos(1, 1)
+
+    local function mWrite(x, y, text, fg, bg)
+        m.setCursorPos(x, y)
+        if fg then m.setTextColor(fg) end
+        if bg then m.setBackgroundColor(bg) end
+        m.write(text)
+        m.setTextColor(colors.white)
+        m.setBackgroundColor(colors.black)
+    end
+
+    local function mBar(x, y, w, pct, fgFull, fgEmpty)
+        local filled = math.floor(w * pct / 100)
+        mWrite(x, y, string.rep("|", filled), fgFull, colors.black)
+        mWrite(x + filled, y, string.rep("|", w - filled), fgEmpty, colors.black)
+    end
+
+    -- Header
+    local title = cfg.id:sub(1, mw)
+    mWrite(1, 1, title, colors.yellow, colors.black)
+    mWrite(1, 2, string.rep("-", mw), colors.gray, colors.black)
+
+    local row = 3
+
+    -- Connection status
+    local statusText = lastOk and "Online" or "Offline"
+    local statusColor = lastOk and colors.green or colors.red
+    mWrite(1, row, "Status: " .. statusText, statusColor, colors.black)
+    row = row + 1
+
+    -- Peripheral count
+    if payload.periph_count then
+        mWrite(1, row, "Periph: " .. tostring(payload.periph_count), colors.white, colors.black)
+        row = row + 1
+    end
+
+    -- Energy bars — look for any *_percent field from energy peripherals
+    for k, v in pairs(payload) do
+        if k:find("_percent$") and type(v) == "number" and row <= mh - 1 then
+            local label = k:gsub("_percent$", ""):sub(1, 8)
+            local pct = math.min(100, math.max(0, v))
+            local barW = mw - #label - 5
+            if barW >= 4 then
+                mWrite(1, row, label .. " " .. string.format("%3d%%", pct), colors.white, colors.black)
+                row = row + 1
+                local fg = pct > 50 and colors.green or (pct > 20 and colors.yellow or colors.red)
+                mBar(1, row, barW, pct, fg, colors.gray)
+                row = row + 1
+            end
+        end
+        if row > mh then break end
+    end
+
+    -- Player count
+    for k, v in pairs(payload) do
+        if k:find("player_count$") and type(v) == "number" and row <= mh then
+            mWrite(1, row, "Players: " .. tostring(v), colors.cyan, colors.black)
+            row = row + 1
+            break
+        end
+    end
+end
+
+-- ============================================================
+-- DELTA REPORTING
+-- Returns a trimmed payload with only changed values + always-send fields.
+-- Resets prevPayload to current values.
+-- ============================================================
+local function makeDelta(full)
+    local delta = {}
+    local hasChanges = false
+
+    for k, v in pairs(full) do
+        if ALWAYS_SEND[k] then
+            delta[k] = v
+        elseif prevPayload[k] ~= v then
+            delta[k] = v
+            hasChanges = true
+        end
+    end
+
+    -- Update cache
+    for k, v in pairs(full) do
+        prevPayload[k] = v
+    end
+    -- Remove keys that are no longer in the payload
+    for k in pairs(prevPayload) do
+        if full[k] == nil then prevPayload[k] = nil end
+    end
+
+    if not hasChanges then
+        -- Only always-send fields changed — mark as delta with no new data
+        delta._delta = true
+        return delta
+    end
+
+    delta._delta = true
+    return delta
+end
+
+-- ============================================================
+-- THRESHOLD ALERTS
+-- Adds alert_<name> boolean fields to the payload.
+-- cfg.thresholds = { { name="left_percent", op="<", value=20 }, ... }
+-- ============================================================
+local function checkThresholds(payload, thresholds)
+    if not thresholds or type(thresholds) ~= "table" then return end
+    for _, rule in ipairs(thresholds) do
+        local current = payload[rule.name]
+        if type(current) == "number" and rule.op and rule.value ~= nil then
+            local triggered = false
+            if     rule.op == "<"  then triggered = current <  rule.value
+            elseif rule.op == "<=" then triggered = current <= rule.value
+            elseif rule.op == ">"  then triggered = current >  rule.value
+            elseif rule.op == ">=" then triggered = current >= rule.value
+            elseif rule.op == "==" then triggered = current == rule.value
+            end
+            payload["alert_" .. rule.name] = triggered
+        end
+    end
+end
 
 -- ============================================================
 -- BUILD TYPE → MODULE MAP  (used to filter by enabled modules)
@@ -924,20 +1093,29 @@ color(colors.gray); print("Press Q to quit | P to print log | run 'scanner setup
 resetColor(); print("")
 
 -- Main scan loop
+local lastSendOk = true
 while true do
     io.write("[SCAN] ")
     local payload = scan(cfg, allowed)
+
+    -- Apply threshold alerts before sending
+    checkThresholds(payload, cfg.thresholds)
+
+    -- Delta reporting: only send changed values if enabled
+    local toSend = (cfg.delta) and makeDelta(payload) or payload
 
     color(colors.cyan)
     io.write(payload.periph_count .. " active peripheral(s)... ")
     resetColor()
 
-    local ok, result = send(cfg.url, payload)
+    local ok, result = send(cfg.url, toSend)
     if ok then
+        lastSendOk = true
         local cmds = result and result.commands or {}
         color(colors.green); print("OK  (" .. #cmds .. " cmd(s))")
         resetColor()
         logAdd("INFO", "send OK cmds=" .. #cmds .. " periph=" .. payload.periph_count)
+        if cfg.monitor then renderMonitor(cfg, payload, true) end
         local action = handleCommands(cmds)
         if action == "setup" then
             cfg = runSetup(cfg); allowed = buildTypeFilter(cfg)
@@ -950,9 +1128,11 @@ while true do
             goto scan_now
         end
     else
+        lastSendOk = false
         -- Connection failed — assume HA is restarting, enter wait mode
         logAdd("ERR", "send FAIL: " .. tostring(result))
         color(colors.red); print("FAIL: " .. tostring(result))
+        if cfg.monitor then renderMonitor(cfg, payload, false) end
         color(colors.yellow)
         print("[PAUSED] Connection lost. Waiting for HA to come back...")
         resetColor()

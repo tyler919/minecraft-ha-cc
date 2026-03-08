@@ -1,4 +1,4 @@
 {
-  "scanner": 10,
-  "changelog": "Energy rate tracking (FE/s) for HA energy dashboard"
+  "scanner": 11,
+  "changelog": "Monitor display, delta reporting, threshold alerts, per-computer HA devices, buttons, diagnostics"
 }
