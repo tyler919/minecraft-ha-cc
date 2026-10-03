@@ -101,7 +101,7 @@ Press **1** for Quick setup (all modules enabled, skip selection) or **2** for C
 |---|---|
 | `scanner` | Normal run — checks for updates silently, loads config, starts scanning |
 | `scanner setup` | Re-run the setup wizard (carries over existing settings by default) |
-| `scanner update` | Force download the latest version, then auto-launch setup |
+| `scanner update` | Force download the pinned release, then auto-launch setup |
 | `scanner log` | Print the in-memory log to a connected printer |
 
 ### Keys while running
@@ -174,6 +174,16 @@ scanner update
 ```
 
 To skip the auto-update on a broken internet connection, the scanner will still start normally if the version check fails.
+
+Updates are pinned. `version.json` on `main` names a release tag (e.g. `v12`) and the SHA-256 of `scanner.lua` at that tag. The scanner downloads from the tag, never from `main`, and refuses to install anything whose hash doesn't match.
+
+### Releasing a new version
+
+1. Bump `VERSION` at the top of `scanner.lua`, commit and merge it to `main`.
+2. Tag that commit: `git tag v13 && git push origin v13` (or create a GitHub release named `v13`).
+3. Update `version.json` on `main`: set `scanner` to `13`, `tag` to `"v13"` and `sha256` to the output of `sha256sum scanner.lua` at that tag.
+
+Computers on v11 or older don't check hashes, so they take one last unverified update from `main` to reach v12.
 
 ---
 

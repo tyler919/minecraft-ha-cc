@@ -1,4 +1,6 @@
 {
-  "scanner": 11,
-  "changelog": "Monitor display, delta reporting, threshold alerts, per-computer HA devices, buttons, diagnostics"
+  "scanner": 12,
+  "tag": "v12",
+  "sha256": "aaf51dd9a8910dfc4844ebf885837f2802dca6a4d77739573a6978c4f4eb4ea8",
+  "changelog": "Updates now install only from the release tag in version.json and must match its SHA-256"
 }
